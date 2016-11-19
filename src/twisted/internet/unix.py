@@ -171,20 +171,32 @@ class _SendmsgMixin(object):
             else:
                 return main.CONNECTION_LOST
 
-        if ancillary:
-            fd = struct.unpack('i', ancillary[0][2])[0]
-            if interfaces.IFileDescriptorReceiver.providedBy(self.protocol):
-                self.protocol.fileDescriptorReceived(fd)
+        for packet in ancillary:
+            if packet[0] == socket.SOL_SOCKET and packet[1] == sendmsg.SCM_RIGHTS:
+                fd = struct.unpack('i', ancillary[0][2])[0]
+                if interfaces.IFileDescriptorReceiver.providedBy(self.protocol):
+                    self.protocol.fileDescriptorReceived(fd)
+                else:
+                    log.msg(
+                        format=(
+                            "%(protocolName)s (on %(hostAddress)r) does not "
+                            "provide IFileDescriptorReceiver; closing file "
+                            "descriptor received (from %(peerAddress)r)."),
+                        hostAddress=self.getHost(), peerAddress=self.getPeer(),
+                        protocolName=self._getLogPrefix(self.protocol),
+                        )
+                    os.close(fd)
             else:
                 log.msg(
                     format=(
-                        "%(protocolName)s (on %(hostAddress)r) does not "
-                        "provide IFileDescriptorReceiver; closing file "
-                        "descriptor received (from %(peerAddress)r)."),
+                        "%(protocolName)s (on %(hostAddress)r) received "
+                        "unknown ancillary data "
+                        "(level=%(level)r, type=%(type)r) "
+                        "from %(peerAddress)r."),
                     hostAddress=self.getHost(), peerAddress=self.getPeer(),
                     protocolName=self._getLogPrefix(self.protocol),
+                    level=packet[0], type=packet[1],
                     )
-                os.close(fd)
 
         return self._dataReceived(data)
 
