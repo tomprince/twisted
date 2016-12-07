@@ -9,6 +9,7 @@ Session Initialization Protocol tests.
 from twisted.cred import portal, checkers
 from twisted.internet import defer, reactor
 from twisted.protocols import sip
+from twisted.python._oldstyle import _oldStyle
 from twisted.trial import unittest
 
 try:
@@ -104,6 +105,7 @@ Content-Type: application/sdp
 Content-Length: 0
 \n""".replace("\n", "\r\n")
 
+@_oldStyle
 class TestRealm:
     def requestAvatar(self, avatarId, mind, *interfaces):
         return sip.IContact, None, lambda: None
@@ -447,6 +449,7 @@ class ParseTests(unittest.TestCase):
 
 
 @implementer(sip.ILocator)
+@_oldStyle
 class DummyLocator:
     def getAddress(self, logicalURL):
         return defer.succeed(sip.URL("server.com", port=5060))
@@ -454,6 +457,7 @@ class DummyLocator:
 
 
 @implementer(sip.ILocator)
+@_oldStyle
 class FailingLocator:
     def getAddress(self, logicalURL):
         return defer.fail(LookupError())

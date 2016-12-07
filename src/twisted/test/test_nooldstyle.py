@@ -26,6 +26,8 @@ elif not _shouldEnableNewStyle():
 
 forbiddenModules = [
     "twisted.internet",
+    "twisted.protocols.sip",
+    "twisted.test.test_sip",
 ]
 
 
