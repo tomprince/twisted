@@ -460,6 +460,8 @@ class TestLoader(object):
         prefixlessNames = reflect.prefixedMethodNames(klass, self.methodPrefix)
         testCaseNames = [self.methodPrefix + name
                          for name in prefixlessNames]
+        if not testCaseNames and hasattr(klass, 'runTest'):
+            testCaseNames = ['runTest']
         return testCaseNames
 
     def loadMethod(self, method):
