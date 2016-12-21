@@ -548,7 +548,7 @@ class _ClientMachine(object):
 
     _machine = MethodicalMachine()
 
-    def __init__(self, endpoint, factory, retryPolicy, clock, log):
+    def __init__(self, endpoint, factory, retryPolicy, clock, log, onConnection):
         """
         @see: L{ClientService.__init__}
 
@@ -568,6 +568,7 @@ class _ClientMachine(object):
 
         self._stopWaiters = []
         self._log = log
+        self._onConnection = onConnection
 
 
     @_machine.state(initial=True)
@@ -587,6 +588,12 @@ class _ClientMachine(object):
         """
         The service is waiting for the reconnection period
         before reconnecting.
+        """
+
+    @_machine.state()
+    def _preparing(self):
+        """
+        The connection has been made and is being prepared for use.
         """
 
     @_machine.state()
@@ -698,19 +705,31 @@ class _ClientMachine(object):
         """
 
     @_machine.output()
-    def _notifyWaiters(self, protocol):
+    def _prepare(self, protocol):
+        self._connectionInProgress = (
+            self._onConnection(protocol._protocol)
+            .addCallback(self._prepared)
+            .addErrback(lambda _: self._connectionFailed()))
+
+
+    @_machine.input()
+    def _prepared(self, client):
+        pass
+
+
+    @_machine.output()
+    def _notifyWaiters(self, client):
         """
         Notify all pending requests for a connection that a connection has been
         made.
 
-        @param protocol: The protocol of the connection.
-        @type protocol: L{IProtocol}
+        @param client: The protocol of the connection.
         """
         # This should be in _resetFailedAttempts but the signature doesn't
         # match.
         self._failedAttempts = 0
 
-        self._currentConnection = protocol._protocol
+        self._currentConnection = client
         self._unawait(self._currentConnection)
 
 
@@ -828,8 +847,8 @@ class _ClientMachine(object):
 
     # State Transitions
 
-    _init.upon(start, enter=_connecting,
-               outputs=[_connect])
+#    _init.upon(start, enter=_connecting,
+#               outputs=[_connect])
     _init.upon(stop, enter=_init,
                outputs=[])
 
@@ -839,8 +858,8 @@ class _ClientMachine(object):
     _connecting.upon(stop, enter=_disconnecting,
                      outputs=[_waitForStop, _stopConnecting],
                      collector=_firstResult)
-    _connecting.upon(_connectionMade, enter=_connected,
-                     outputs=[_notifyWaiters])
+    _connecting.upon(_connectionMade, enter=_preparing,
+                     outputs=[_prepare])
     _connecting.upon(_connectionFailed, enter=_waiting,
                      outputs=[_wait])
 
@@ -851,6 +870,13 @@ class _ClientMachine(object):
                   collector=_firstResult)
     _waiting.upon(_reconnect, enter=_connecting,
                   outputs=[_connect])
+
+    _preparing.upon(start, enter=_preparing, outputs=[])
+    _preparing.upon(stop, enter=_disconnecting,
+                    outputs=[_waitForStop, _stopConnecting],
+                    collector=_firstResult)
+    _preparing.upon(_prepared, enter=_connected, outputs=[_notifyWaiters])
+    _preparing.upon(_connectionFailed, enter=_waiting, outputs=[_wait])
 
     _connected.upon(start, enter=_connected,
                     outputs=[])
@@ -919,7 +945,7 @@ class ClientService(service.Service, object):
     """
 
     _log = Logger()
-    def __init__(self, endpoint, factory, retryPolicy=None, clock=None):
+    def __init__(self, endpoint, factory, retryPolicy=None, clock=None, onConnection=succeed):
         """
         @param endpoint: A L{stream client endpoint
             <interfaces.IStreamClientEndpoint>} provider which will be used to
@@ -945,7 +971,7 @@ class ClientService(service.Service, object):
 
         self._machine = _ClientMachine(
             endpoint, factory, retryPolicy, clock,
-            log=self._log,
+            log=self._log, onConnection=onConnection,
         )
 
 
