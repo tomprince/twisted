@@ -447,7 +447,7 @@ class TestLoader(object):
         if not isTestCase(klass):
             raise ValueError("%r is not a test case" % (klass,))
         names = self.getTestCaseNames(klass)
-        tests = self.sort([self._makeCase(klass, self.methodPrefix+name)
+        tests = self.sort([self._makeCase(klass, name)
                            for name in names])
         return self.suiteFactory(tests)
     loadTestsFromTestCase = loadClass
@@ -457,7 +457,10 @@ class TestLoader(object):
         Given a class that contains C{TestCase}s, return a list of names of
         methods that probably contain tests.
         """
-        return reflect.prefixedMethodNames(klass, self.methodPrefix)
+        prefixlessNames = reflect.prefixedMethodNames(klass, self.methodPrefix)
+        testCaseNames = [self.methodPrefix + name
+                         for name in prefixlessNames]
+        return testCaseNames
 
     def loadMethod(self, method):
         """
