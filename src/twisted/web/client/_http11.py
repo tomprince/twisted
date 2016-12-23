@@ -1,4 +1,4 @@
-# -*- test-case-name: twisted.web.test.test_newclient -*-
+# -*- test-case-name: twisted.web.client.test.test_http11 -*-
 # Copyright (c) Twisted Matrix Laboratories.
 # See LICENSE for details.
 

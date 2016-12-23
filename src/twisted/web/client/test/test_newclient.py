@@ -2,7 +2,7 @@
 # See LICENSE for details.
 
 """
-Tests for L{twisted.web._newclient}.
+Tests for L{twisted.web.client._http11}.
 """
 
 from __future__ import division, absolute_import
@@ -19,15 +19,17 @@ from twisted.internet.defer import Deferred, succeed, fail, CancelledError
 from twisted.internet.protocol import Protocol
 from twisted.trial.unittest import TestCase
 from twisted.test.proto_helpers import StringTransport, AccumulatingProtocol
-from twisted.web._newclient import UNKNOWN_LENGTH, STATUS, HEADER, BODY, DONE
-from twisted.web._newclient import Request, Response, HTTPParser, HTTPClientParser
-from twisted.web._newclient import BadResponseVersion, ParseError, HTTP11ClientProtocol
-from twisted.web._newclient import ChunkedEncoder, RequestGenerationFailed
-from twisted.web._newclient import RequestTransmissionFailed, ResponseFailed
-from twisted.web._newclient import WrongBodyLength, RequestNotSent
-from twisted.web._newclient import ConnectionAborted, ResponseNeverReceived
-from twisted.web._newclient import BadHeaders, ResponseDone, PotentialDataLoss, ExcessWrite
-from twisted.web._newclient import TransportProxyProducer, LengthEnforcingConsumer, makeStatefulDispatcher
+from .._http11 import (
+    UNKNOWN_LENGTH, STATUS, HEADER, BODY, DONE,
+    Request, Response, HTTPParser, HTTPClientParser,
+    BadResponseVersion, ParseError, HTTP11ClientProtocol,
+    ChunkedEncoder, RequestGenerationFailed,
+    RequestTransmissionFailed, ResponseFailed,
+    WrongBodyLength, RequestNotSent,
+    ConnectionAborted, ResponseNeverReceived,
+    BadHeaders, ResponseDone, PotentialDataLoss, ExcessWrite,
+    TransportProxyProducer, LengthEnforcingConsumer, makeStatefulDispatcher,
+)
 from twisted.web.http_headers import Headers
 from twisted.web.http import _DataLoss
 from twisted.web.iweb import IBodyProducer, IResponse
@@ -55,7 +57,7 @@ class StringTransport(StringTransport):
 
 class ArbitraryException(Exception):
     """
-    A unique, arbitrary exception type which L{twisted.web._newclient} knows
+    A unique, arbitrary exception type which L{twisted.web._http11} knows
     nothing about.
     """
 
@@ -78,7 +80,7 @@ def assertWrapperExceptionTypes(self, deferred, mainType, reasonTypes):
     it fails with match the list of exception types given by C{reasonTypes}.
 
     This is a helper for testing failures of exceptions which subclass
-    L{_newclient._WrapperException}.
+    L{_http11._WrapperException}.
 
     @param self: A L{TestCase} instance which will be used to make the
         assertions.
@@ -86,7 +88,7 @@ def assertWrapperExceptionTypes(self, deferred, mainType, reasonTypes):
     @param deferred: The L{Deferred} which is expected to fail with
         C{mainType}.
 
-    @param mainType: A L{_newclient._WrapperException} subclass which will be
+    @param mainType: A L{_http11._WrapperException} subclass which will be
         trapped on C{deferred}.
 
     @param reasonTypes: A sequence of exception types which will be trapped on

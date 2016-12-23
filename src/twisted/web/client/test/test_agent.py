@@ -13,9 +13,9 @@ from zope.interface.verify import verifyObject
 
 from twisted.trial.unittest import TestCase
 from twisted.web import client, error, http_headers
-from twisted.web._newclient import RequestNotSent, RequestTransmissionFailed
-from twisted.web._newclient import ResponseNeverReceived, ResponseFailed
-from twisted.web._newclient import PotentialDataLoss
+from .._http11 import RequestNotSent, RequestTransmissionFailed
+from .._http11 import ResponseNeverReceived, ResponseFailed
+from .._http11 import PotentialDataLoss
 from twisted.internet import defer, task
 from twisted.python.failure import Failure
 from twisted.python.compat import cookielib, intToBytes
@@ -36,7 +36,7 @@ from twisted.web.iweb import (
     UNKNOWN_LENGTH, IAgent, IBodyProducer, IResponse, IAgentEndpointFactory,
     )
 from twisted.web.http_headers import Headers
-from twisted.web._newclient import HTTP11ClientProtocol, Response
+from .._http11 import HTTP11ClientProtocol, Response
 
 from twisted.internet.interfaces import IOpenSSLClientConnectionCreator
 from zope.interface.declarations import implementer

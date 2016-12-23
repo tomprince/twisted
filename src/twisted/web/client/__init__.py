@@ -1,4 +1,4 @@
-# -*- test-case-name: twisted.web.test.test_webclient,twisted.web.test.test_agent -*-
+# -*- test-case-name: twisted.web.client.test.test_webclient,twisted.web.client.test.test_agent -*-
 # Copyright (c) Twisted Matrix Laboratories.
 # See LICENSE for details.
 
@@ -804,10 +804,10 @@ def downloadPage(url, file, contextFactory=None, *args, **kwargs):
 # feature equivalent.
 
 from twisted.web.error import SchemeNotSupported
-from twisted.web._newclient import Request, Response, HTTP11ClientProtocol
-from twisted.web._newclient import ResponseDone, ResponseFailed
-from twisted.web._newclient import RequestNotSent, RequestTransmissionFailed
-from twisted.web._newclient import (
+from ._http11 import Request, Response, HTTP11ClientProtocol
+from ._http11 import ResponseDone, ResponseFailed
+from ._http11 import RequestNotSent, RequestTransmissionFailed
+from ._http11 import (
     ResponseNeverReceived, PotentialDataLoss, _WrapperException)
 
 
