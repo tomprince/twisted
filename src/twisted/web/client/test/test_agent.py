@@ -12,7 +12,7 @@ from io import BytesIO
 from zope.interface.verify import verifyObject
 
 from twisted.trial.unittest import TestCase
-from twisted.web import client, error, http_headers
+from twisted.web import client, error
 from .._http11 import RequestNotSent, RequestTransmissionFailed
 from .._http11 import ResponseNeverReceived, ResponseFailed
 from .._http11 import PotentialDataLoss
@@ -29,14 +29,16 @@ from twisted.internet.defer import Deferred, succeed, CancelledError
 from twisted.internet.endpoints import TCP4ClientEndpoint
 from twisted.internet.address import IPv4Address, IPv6Address
 
-from twisted.web.client import (FileBodyProducer, Request, HTTPConnectionPool,
-                                ResponseDone, _HTTP11ClientFactory, URI)
+from twisted.web.client import (FileBodyProducer, HTTPConnectionPool,
+                                ResponseDone, URI)
 
 from twisted.web.iweb import (
     UNKNOWN_LENGTH, IAgent, IBodyProducer, IResponse, IAgentEndpointFactory,
     )
 from twisted.web.http_headers import Headers
-from .._http11 import HTTP11ClientProtocol, Response
+from .._http11 import HTTP11ClientProtocol, Response, Request
+from .._agent import _urljoin, _HTTP11ClientFactory
+from .._agent import _RetryingHTTP11ClientProtocol, _FakeUrllib2Response, _FakeUrllib2Request
 
 from twisted.internet.interfaces import IOpenSSLClientConnectionCreator
 from zope.interface.declarations import implementer
@@ -63,6 +65,47 @@ else:
     from twisted.internet._sslverify import ClientTLSOptions, IOpenSSLTrustRoot
     from twisted.internet.ssl import optionsForClientTLS
     from twisted.protocols.tls import TLSMemoryBIOProtocol, TLSMemoryBIOFactory
+
+
+
+class URLJoinTests(TestCase):
+    """
+    Tests for L{_urljoin}.
+    """
+    def test_noFragments(self):
+        """
+        L{_urljoin} does not include a fragment identifier in the
+        resulting URL if neither the base nor the new path include a fragment
+        identifier.
+        """
+        self.assertEqual(
+            _urljoin(b'http://foo.com/bar', b'/quux'),
+            b'http://foo.com/quux')
+        self.assertEqual(
+            _urljoin(b'http://foo.com/bar#', b'/quux'),
+            b'http://foo.com/quux')
+        self.assertEqual(
+            _urljoin(b'http://foo.com/bar', b'/quux#'),
+            b'http://foo.com/quux')
+
+
+    def test_preserveFragments(self):
+        """
+        L{_urljoin} preserves the fragment identifier from either the
+        new path or the base URL respectively, as specified in the HTTP 1.1 bis
+        draft.
+
+        @see: U{https://tools.ietf.org/html/draft-ietf-httpbis-p2-semantics-22#section-7.1.2}
+        """
+        self.assertEqual(
+            _urljoin(b'http://foo.com/bar#frag', b'/quux'),
+            b'http://foo.com/quux#frag')
+        self.assertEqual(
+            _urljoin(b'http://foo.com/bar', b'/quux#frag2'),
+            b'http://foo.com/quux#frag2')
+        self.assertEqual(
+            _urljoin(b'http://foo.com/bar#frag', b'/quux#frag2'),
+            b'http://foo.com/quux#frag2')
 
 
 
@@ -937,7 +980,7 @@ class AgentTests(TestCase, FakeReactorAndConnectMixin, AgentTestsMixin,
         agent = MyAgent(self.reactor, pool=pool)
         self.assertIdentical(pool, agent._pool)
 
-        headers = http_headers.Headers()
+        headers = Headers()
         headers.addRawHeader(b"host", b"foo")
         bodyProducer = object()
         agent.request(b'GET', b'http://foo/',
@@ -1033,7 +1076,7 @@ class AgentTests(TestCase, FakeReactorAndConnectMixin, AgentTestsMixin,
         I{Host} header, that value takes precedence over the one which would
         otherwise be automatically provided.
         """
-        headers = http_headers.Headers({b'foo': [b'bar'], b'host': [b'quux']})
+        headers = Headers({b'foo': [b'bar'], b'host': [b'quux']})
         self.agent._getEndpoint = lambda *args: self
         self.agent.request(
             b'GET', b'http://example.com/foo?bar', headers)
@@ -1047,7 +1090,7 @@ class AgentTests(TestCase, FakeReactorAndConnectMixin, AgentTestsMixin,
         If a I{Host} header must be added to the request, the L{Headers}
         instance passed to L{Agent.request} is not modified.
         """
-        headers = http_headers.Headers()
+        headers = Headers()
         self.agent._getEndpoint = lambda *args: self
         self.agent.request(
             b'GET', b'http://example.com/foo', headers)
@@ -1057,7 +1100,7 @@ class AgentTests(TestCase, FakeReactorAndConnectMixin, AgentTestsMixin,
         # The request should have been issued.
         self.assertEqual(len(protocol.requests), 1)
         # And the headers object passed in should not have changed.
-        self.assertEqual(headers, http_headers.Headers())
+        self.assertEqual(headers, Headers())
 
 
     def test_hostValueStandardHTTP(self):
@@ -1114,7 +1157,7 @@ class AgentTests(TestCase, FakeReactorAndConnectMixin, AgentTestsMixin,
         """
         self.agent._getEndpoint = lambda *args: self
 
-        headers = http_headers.Headers({b'foo': [b'bar']})
+        headers = Headers({b'foo': [b'bar']})
         # Just going to check the body for identity, so it doesn't need to be
         # real.
         body = object()
@@ -1131,7 +1174,7 @@ class AgentTests(TestCase, FakeReactorAndConnectMixin, AgentTestsMixin,
         self.assertEqual(req.uri, b'/foo?bar')
         self.assertEqual(
             req.headers,
-            http_headers.Headers({b'foo': [b'bar'],
+            Headers({b'foo': [b'bar'],
                                   b'host': [b'example.com:1234']}))
         self.assertIdentical(req.bodyProducer, body)
 
@@ -1202,7 +1245,7 @@ class AgentTests(TestCase, FakeReactorAndConnectMixin, AgentTestsMixin,
             (b'HTTP', 1, 1),
             200,
             b'OK',
-            client.Headers({}),
+            Headers({}),
             None,
             req)
         res.callback(resp)
@@ -1233,7 +1276,7 @@ class AgentTests(TestCase, FakeReactorAndConnectMixin, AgentTestsMixin,
         """
         L{Request.absoluteURI} is L{None} if L{Request._parsedURI} is L{None}.
         """
-        request = client.Request(b'FOO', b'/', client.Headers(), None)
+        request = Request(b'FOO', b'/', Headers(), None)
         self.assertIdentical(request.absoluteURI, None)
 
 
@@ -1496,7 +1539,7 @@ class WebClientContextFactoryTests(TestCase):
         """
         Get WebClientContextFactory while quashing its deprecation warning.
         """
-        from twisted.web.client import WebClientContextFactory
+        from .._agent import WebClientContextFactory
         self.warned = self.flushWarnings([WebClientContextFactoryTests.setUp])
         self.webClientContextFactory = WebClientContextFactory
 
@@ -1561,7 +1604,7 @@ class WebClientContextFactoryTests(TestCase):
 class HTTPConnectionPoolRetryTests(TestCase, FakeReactorAndConnectMixin):
     """
     L{client.HTTPConnectionPool}, by using
-    L{client._RetryingHTTP11ClientProtocol}, supports retrying requests done
+    L{_RetryingHTTP11ClientProtocol}, supports retrying requests done
     against previously cached connections.
     """
 
@@ -1570,7 +1613,7 @@ class HTTPConnectionPoolRetryTests(TestCase, FakeReactorAndConnectMixin):
         Only GET, HEAD, OPTIONS, TRACE, DELETE methods cause a retry.
         """
         pool = client.HTTPConnectionPool(None)
-        connection = client._RetryingHTTP11ClientProtocol(None, pool)
+        connection = _RetryingHTTP11ClientProtocol(None, pool)
         self.assertTrue(connection._shouldRetry(
             b"GET", RequestNotSent(), None))
         self.assertTrue(connection._shouldRetry(
@@ -1596,7 +1639,7 @@ class HTTPConnectionPoolRetryTests(TestCase, FakeReactorAndConnectMixin):
         L{ResponseNeverReceived} exceptions cause a retry.
         """
         pool = client.HTTPConnectionPool(None)
-        connection = client._RetryingHTTP11ClientProtocol(None, pool)
+        connection = _RetryingHTTP11ClientProtocol(None, pool)
         self.assertTrue(connection._shouldRetry(
             b"GET", RequestNotSent(), None))
         self.assertTrue(connection._shouldRetry(
@@ -1616,7 +1659,7 @@ class HTTPConnectionPoolRetryTests(TestCase, FakeReactorAndConnectMixin):
         retried.
         """
         pool = client.HTTPConnectionPool(None)
-        connection = client._RetryingHTTP11ClientProtocol(None, pool)
+        connection = _RetryingHTTP11ClientProtocol(None, pool)
         exception = ResponseNeverReceived([Failure(defer.CancelledError())])
         self.assertFalse(connection._shouldRetry(b"GET", exception, None))
 
@@ -1628,7 +1671,7 @@ class HTTPConnectionPoolRetryTests(TestCase, FakeReactorAndConnectMixin):
         request should be retried.
         """
         pool = client.HTTPConnectionPool(None)
-        connection = client._RetryingHTTP11ClientProtocol(None, pool)
+        connection = _RetryingHTTP11ClientProtocol(None, pool)
         self.assertTrue(connection._shouldRetry(
             b"GET", ResponseNeverReceived([Failure(Exception())]), None))
 
@@ -1637,7 +1680,7 @@ class HTTPConnectionPoolRetryTests(TestCase, FakeReactorAndConnectMixin):
         """
         If L{client.HTTPConnectionPool.getConnection} returns a previously
         cached connection, it will get wrapped in a
-        L{client._RetryingHTTP11ClientProtocol}.
+        L{_RetryingHTTP11ClientProtocol}.
         """
         pool = client.HTTPConnectionPool(Clock())
 
@@ -1652,7 +1695,7 @@ class HTTPConnectionPoolRetryTests(TestCase, FakeReactorAndConnectMixin):
 
         def gotConnection(connection):
             self.assertIsInstance(connection,
-                                  client._RetryingHTTP11ClientProtocol)
+                                  _RetryingHTTP11ClientProtocol)
             self.assertIdentical(connection._clientProtocol, protocol)
         return d.addCallback(gotConnection)
 
@@ -1683,11 +1726,11 @@ class HTTPConnectionPoolRetryTests(TestCase, FakeReactorAndConnectMixin):
             return defer.succeed(protocol)
 
         bodyProducer = object()
-        request = client.Request(b"FOO", b"/", client.Headers(), bodyProducer,
+        request = Request(b"FOO", b"/", Headers(), bodyProducer,
                                  persistent=True)
         newProtocol()
         protocol = protocols[0]
-        retrier = client._RetryingHTTP11ClientProtocol(protocol, newProtocol)
+        retrier = _RetryingHTTP11ClientProtocol(protocol, newProtocol)
 
         def _shouldRetry(m, e, bp):
             self.assertEqual(m, b"FOO")
@@ -1709,8 +1752,8 @@ class HTTPConnectionPoolRetryTests(TestCase, FakeReactorAndConnectMixin):
 
     def test_retryIfShouldRetryReturnsTrue(self):
         """
-        L{client._RetryingHTTP11ClientProtocol} retries when
-        L{client._RetryingHTTP11ClientProtocol._shouldRetry} returns C{True}.
+        L{_RetryingHTTP11ClientProtocol} retries when
+        L{_RetryingHTTP11ClientProtocol._shouldRetry} returns C{True}.
         """
         d, protocols = self.retryAttempt(True)
         # We retried!
@@ -1722,8 +1765,8 @@ class HTTPConnectionPoolRetryTests(TestCase, FakeReactorAndConnectMixin):
 
     def test_dontRetryIfShouldRetryReturnsFalse(self):
         """
-        L{client._RetryingHTTP11ClientProtocol} does not retry when
-        L{client._RetryingHTTP11ClientProtocol._shouldRetry} returns C{False}.
+        L{_RetryingHTTP11ClientProtocol} does not retry when
+        L{_RetryingHTTP11ClientProtocol._shouldRetry} returns C{False}.
         """
         d, protocols = self.retryAttempt(False)
         # We did not retry:
@@ -1741,14 +1784,14 @@ class HTTPConnectionPoolRetryTests(TestCase, FakeReactorAndConnectMixin):
         support retries.
         """
         pool = client.HTTPConnectionPool(None)
-        connection = client._RetryingHTTP11ClientProtocol(None, pool)
+        connection = _RetryingHTTP11ClientProtocol(None, pool)
         self.assertTrue(connection._shouldRetry(b"GET", RequestNotSent(), None))
         self.assertFalse(connection._shouldRetry(b"GET", RequestNotSent(), object()))
 
 
     def test_onlyRetryOnce(self):
         """
-        If a L{client._RetryingHTTP11ClientProtocol} fails more than once on
+        If a L{_RetryingHTTP11ClientProtocol} fails more than once on
         an idempotent query before a response is received, it will not retry.
         """
         d, protocols = self.retryAttempt(True)
@@ -1784,7 +1827,7 @@ class HTTPConnectionPoolRetryTests(TestCase, FakeReactorAndConnectMixin):
     def test_retryWithNewConnection(self):
         """
         L{client.HTTPConnectionPool} creates
-        {client._RetryingHTTP11ClientProtocol} with a new connection factory
+        {_RetryingHTTP11ClientProtocol} with a new connection factory
         method that creates a new connection using the same key and endpoint
         as the wrapped connection.
         """
@@ -1809,7 +1852,7 @@ class HTTPConnectionPoolRetryTests(TestCase, FakeReactorAndConnectMixin):
 
         def gotConnection(connection):
             self.assertIsInstance(connection,
-                                  client._RetryingHTTP11ClientProtocol)
+                                  _RetryingHTTP11ClientProtocol)
             self.assertIdentical(connection._clientProtocol, protocol)
             # Verify that the _newConnection method on retrying connection
             # calls _newConnection on the pool:
@@ -1830,14 +1873,14 @@ class CookieTestsMixin(object):
         """
         Add a cookie to a cookie jar.
         """
-        response = client._FakeUrllib2Response(
+        response = _FakeUrllib2Response(
             client.Response(
                 (b'HTTP', 1, 1),
                 200,
                 b'OK',
-                client.Headers({b'Set-Cookie': cookies}),
+                Headers({b'Set-Cookie': cookies}),
                 None))
-        request = client._FakeUrllib2Request(uri)
+        request = _FakeUrllib2Request(uri)
         cookieJar.extract_cookies(response, request)
         return request, response
 
@@ -1845,8 +1888,8 @@ class CookieTestsMixin(object):
 
 class CookieJarTests(TestCase, CookieTestsMixin):
     """
-    Tests for L{twisted.web.client._FakeUrllib2Response} and
-    L{twisted.web.client._FakeUrllib2Request}'s interactions with
+    Tests for L{_FakeUrllib2Response} and
+    L{_FakeUrllib2Request}'s interactions with
     C{cookielib.CookieJar} instances.
     """
     def makeCookieJar(self):
@@ -1953,7 +1996,7 @@ class CookieAgentTests(TestCase, CookieTestsMixin, FakeReactorAndConnectMixin,
             (b'HTTP', 1, 1),
             200,
             b'OK',
-            client.Headers({b'Set-Cookie': [b'foo=1',]}),
+            Headers({b'Set-Cookie': [b'foo=1',]}),
             None)
         res.callback(resp)
 
@@ -2115,7 +2158,7 @@ class ContentDecoderAgentTests(TestCase, FakeReactorAndConnectMixin,
         L{client.ContentDecoderAgent} creates a new field for the decoders it
         knows about.
         """
-        headers = http_headers.Headers({b'foo': [b'bar'],
+        headers = Headers({b'foo': [b'bar'],
                                         b'accept-encoding': [b'fizz']})
         agent = client.ContentDecoderAgent(
             self.agent, [(b'decoder1', Decoder1), (b'decoder2', Decoder2)])
@@ -2143,7 +2186,7 @@ class ContentDecoderAgentTests(TestCase, FakeReactorAndConnectMixin,
 
         req, res = self.protocol.requests.pop()
 
-        response = Response((b'HTTP', 1, 1), 200, b'OK', http_headers.Headers(),
+        response = Response((b'HTTP', 1, 1), 200, b'OK', Headers(),
                             None)
         res.callback(response)
 
@@ -2161,7 +2204,7 @@ class ContentDecoderAgentTests(TestCase, FakeReactorAndConnectMixin,
 
         req, res = self.protocol.requests.pop()
 
-        headers = http_headers.Headers({b'foo': [b'bar'],
+        headers = Headers({b'foo': [b'bar'],
                                         b'content-encoding': [b'fizz']})
         response = Response((b'HTTP', 1, 1), 200, b'OK', headers, None)
         res.callback(response)
@@ -2180,7 +2223,7 @@ class ContentDecoderAgentTests(TestCase, FakeReactorAndConnectMixin,
 
         req, res = self.protocol.requests.pop()
 
-        headers = http_headers.Headers({b'foo': [b'bar'],
+        headers = Headers({b'foo': [b'bar'],
                                         b'content-encoding':
                                         [b'decoder1,fizz,decoder2']})
         response = Response((b'HTTP', 1, 1), 200, b'OK', headers, None)
@@ -2249,7 +2292,7 @@ class ContentDecoderAgentWithGzipTests(TestCase,
 
         req, res = self.protocol.requests.pop()
 
-        headers = http_headers.Headers({b'foo': [b'bar'],
+        headers = Headers({b'foo': [b'bar'],
                                         b'content-encoding': [b'gzip']})
         transport = StringTransport()
         response = Response((b'HTTP', 1, 1), 200, b'OK', headers, transport)
@@ -2294,7 +2337,7 @@ class ContentDecoderAgentWithGzipTests(TestCase,
 
         req, res = self.protocol.requests.pop()
 
-        headers = http_headers.Headers({b'foo': [b'bar'],
+        headers = Headers({b'foo': [b'bar'],
                                         b'content-encoding': [b'gzip']})
         transport = StringTransport()
         response = Response((b'HTTP', 1, 1), 200, b'OK', headers, transport)
@@ -2344,7 +2387,7 @@ class ContentDecoderAgentWithGzipTests(TestCase,
 
         req, res = self.protocol.requests.pop()
 
-        headers = http_headers.Headers({b'content-encoding': [b'gzip']})
+        headers = Headers({b'content-encoding': [b'gzip']})
         transport = StringTransport()
         response = Response((b'HTTP', 1, 1), 200, b'OK', headers, transport)
         res.callback(response)
@@ -2389,7 +2432,7 @@ class ContentDecoderAgentWithGzipTests(TestCase,
 
         req, res = self.protocol.requests.pop()
 
-        headers = http_headers.Headers({b'content-encoding': [b'gzip']})
+        headers = Headers({b'content-encoding': [b'gzip']})
         transport = StringTransport()
         response = Response((b'HTTP', 1, 1), 200, b'OK', headers, transport)
         res.callback(response)
@@ -2442,7 +2485,7 @@ class ProxyAgentTests(TestCase, FakeReactorAndConnectMixin, AgentTestsMixin):
         L{client.ProxyAgent} issues an HTTP request against the proxy, with the
         full URI as path, when C{request} is called.
         """
-        headers = http_headers.Headers({b'foo': [b'bar']})
+        headers = Headers({b'foo': [b'bar']})
         # Just going to check the body for identity, so it doesn't need to be
         # real.
         body = object()
@@ -2454,7 +2497,7 @@ class ProxyAgentTests(TestCase, FakeReactorAndConnectMixin, AgentTestsMixin):
         self.assertEqual(port, 5678)
 
         self.assertIsInstance(factory._wrappedFactory,
-                              client._HTTP11ClientFactory)
+                              _HTTP11ClientFactory)
 
         protocol = self.protocol
 
@@ -2466,7 +2509,7 @@ class ProxyAgentTests(TestCase, FakeReactorAndConnectMixin, AgentTestsMixin):
         self.assertEqual(req.uri, b'http://example.com:1234/foo?bar')
         self.assertEqual(
             req.headers,
-            http_headers.Headers({b'foo': [b'bar'],
+            Headers({b'foo': [b'bar'],
                                   b'host': [b'example.com:1234']}))
         self.assertIdentical(req.bodyProducer, body)
 
@@ -2520,7 +2563,7 @@ class _RedirectAgentTestsMixin(object):
 
         req, res = self.protocol.requests.pop()
 
-        headers = http_headers.Headers()
+        headers = Headers()
         response = Response((b'HTTP', 1, 1), 200, b'OK', headers, None)
         res.callback(response)
 
@@ -2555,7 +2598,7 @@ class _RedirectAgentTestsMixin(object):
             scheme = b'https'
             expectedPort = 443
 
-        headers = http_headers.Headers(
+        headers = Headers(
             {b'location': [scheme + b'://example.com/bar']})
         response = Response((b'HTTP', 1, 1), code, b'OK', headers, None)
         res.callback(response)
@@ -2603,7 +2646,7 @@ class _RedirectAgentTestsMixin(object):
 
         req, res = self.protocol.requests.pop()
 
-        headers = http_headers.Headers(
+        headers = Headers(
             {b'location': [b'http://example.com/bar']})
         response = Response((b'HTTP', 1, 1), code, b'OK', headers, None)
         res.callback(response)
@@ -2631,7 +2674,7 @@ class _RedirectAgentTestsMixin(object):
 
         req, res = self.protocol.requests.pop()
 
-        headers = http_headers.Headers()
+        headers = Headers()
         response = Response((b'HTTP', 1, 1), 301, b'OK', headers, None)
         res.callback(response)
 
@@ -2656,7 +2699,7 @@ class _RedirectAgentTestsMixin(object):
 
         req, res = self.protocol.requests.pop()
 
-        headers = http_headers.Headers()
+        headers = Headers()
         response = Response((b'HTTP', 1, 1), code, b'OK', headers, None)
         res.callback(response)
 
@@ -2689,7 +2732,7 @@ class _RedirectAgentTestsMixin(object):
 
         req, res = self.protocol.requests.pop()
 
-        headers = http_headers.Headers(
+        headers = Headers(
             {b'location': [b'http://example.com/bar']})
         response = Response((b'HTTP', 1, 1), 302, b'OK', headers, None)
         res.callback(response)
@@ -2722,7 +2765,7 @@ class _RedirectAgentTestsMixin(object):
 
         req, res = self.protocol.requests.pop()
 
-        headers = http_headers.Headers(
+        headers = Headers(
             {b'location': [location]})
         response = Response((b'HTTP', 1, 1), 302, b'OK', headers, None)
         res.callback(response)
@@ -2789,7 +2832,7 @@ class _RedirectAgentTestsMixin(object):
 
         redirectReq, redirectRes = self.protocol.requests.pop()
 
-        headers = http_headers.Headers(
+        headers = Headers(
             {b'location': [b'http://example.com/bar']})
         redirectResponse = Response((b'HTTP', 1, 1), 302, b'OK', headers, None)
         redirectRes.callback(redirectResponse)
