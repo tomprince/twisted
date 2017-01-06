@@ -859,12 +859,15 @@ class ClientServiceTests(SynchronousTestCase):
 
 
 from hypothesis import assume, strategies as st
-from hypothesis.stateful import RuleBasedStateMachine, rule
+from hypothesis.stateful import RuleBasedStateMachine, rule, run_state_machine_as_test
 
 class ClientServiceRuleMachine(RuleBasedStateMachine):
-    def __init__(self):
+    def __init__(self, case):
+        self.case = case
         super(ClientServiceRuleMachine, self).__init__()
         self.clock = Clock()
+        self.stopDeferreds = []
+        self.whenConnectedDeferreds = []
         self.cq, self.service = makeReconnector(
             startService=False, fireImmediately=False, clock=self.clock)
 
@@ -874,6 +877,28 @@ class ClientServiceRuleMachine(RuleBasedStateMachine):
 
     @rule()
     def stop(self):
-        self.service.stopService()
+        self.stopDeferreds.append(self.service.stopService())
 
-ClientServiceStateTests = ClientServiceRuleMachine.TestCase
+    @rule()
+    def connect(self):
+        assume(self.cq.connectQueue)
+        self.cq.connectQueue.pop(0).callback(None)
+
+    def timeout(self):
+        self.clock.advance(AT_LEAST_ONE_ATTEMPT)
+
+    def connectFailed(self):
+        assume(self.cq.connectQueue)
+        self.cq.connectQueue.pop(0).errback(Exception("no connection"))
+
+    def disconnect(self):
+        assume(self.cq.constructedProtocols)
+        self.cq.constructedProtocols.pop(0).connectionLost(Failure(IndentationError()))
+
+    def checkConnected(self):
+        self.whenConnectedDeferreds.append(self.service.whenConnected())
+
+
+class ClientServiceMachineTests(TestCase):
+    def test_stuff(self):
+        run_state_machine_as_test(lambda: ClientServiceRuleMachine(self))

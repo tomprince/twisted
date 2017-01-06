@@ -847,10 +847,11 @@ class _ClientMachine(object):
 
     # State Transitions
 
-#    _init.upon(start, enter=_connecting,
-#               outputs=[_connect])
+    _init.upon(start, enter=_connecting,
+               outputs=[_connect])
     _init.upon(stop, enter=_init,
-               outputs=[])
+               outputs=[],
+               collector=lambda _: succeed(None))
 
     _connecting.upon(start, enter=_connecting, outputs=[])
     # Note that this synchonously triggers _connectionFailed in the
@@ -909,7 +910,8 @@ class _ClientMachine(object):
     _stopped.upon(start, enter=_connecting,
                   outputs=[_connect])
     _stopped.upon(stop, enter=_stopped,
-                  outputs=[])
+                  outputs=[],
+                  collector=lambda _: succeed(None))
 
     _init.upon(whenConnected, enter=_init,
                outputs=[_awaitingConnection],
