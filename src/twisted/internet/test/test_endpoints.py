@@ -3801,10 +3801,14 @@ class HostnameEndpointRuleMachine(RuleBasedStateMachine):
         )
         self.connectDeferred.addErrback(lambda _: None)
 
+
     @precondition(lambda self: self.reactor.calls)
     @rule()
     def timeout(self):
-        self.reactor.advance(endpoints.HostnameEndpoint._DEFAULT_ATTEMPT_DELAY * 2)
+        self.reactor._sortCalls()
+        nextCall = self.reactor.calls[0].getTime() - self.reactor.seconds()
+        self.reactor.advance(nextCall)
+
 
     # From IResolutionReceiver
     # - triggered via deterministicResolvingReactor
