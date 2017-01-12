@@ -13,6 +13,13 @@ from socket import AF_INET, AF_INET6, SOCK_STREAM, IPPROTO_TCP
 from unicodedata import normalize
 from types import FunctionType
 
+import attr
+
+from hypothesis import strategies as st
+from hypothesis.stateful import (
+    RuleBasedStateMachine, rule, run_state_machine_as_test, precondition,
+)
+
 from zope.interface import implementer, provider, providedBy
 from zope.interface.interface import InterfaceClass
 from zope.interface.verify import verifyObject, verifyClass
@@ -3739,13 +3746,13 @@ class WrapClientTLSTests(unittest.TestCase):
         self.assertIn("OpenSSL not available", str(notImplemented))
 
 
-from hypothesis import strategies as st
-from hypothesis.stateful import RuleBasedStateMachine, rule, run_state_machine_as_test, precondition
 
 def makeConnection(tcpClient, transport=object()):
     (host, port, factory, timeout, bindAddress) = tcpClient
     clientProtocol = factory.buildProtocol(None)
     clientProtocol.makeConnection(transport)
+
+
 
 def failConnection(tcpClient, exception=None):
     if exception is None:
@@ -3753,7 +3760,8 @@ def failConnection(tcpClient, exception=None):
     (host, port, factory, timeout, bindAddress) = tcpClient
     factory.clientConnectionFailed(None, exception)
 
-import attr
+
+
 @attr.s
 class ResolverController(object):
     _receiver = attr.ib(default=None)
@@ -3761,9 +3769,12 @@ class ResolverController(object):
     def resolveAddress(self, address):
         self._receiver.addressResolved(address)
 
+
     def finishResolving(self):
         self._receiver.resolutionComplete()
         self._receiver = None
+
+
 
 def controllableResolvingReactor(reactor):
     controller = ResolverController()
@@ -3777,6 +3788,7 @@ def controllableResolvingReactor(reactor):
             assert controller._receiver is None
             controller._receiver = resolutionReceiver
 
+
     @provider(IReactorPluggableNameResolver)
     class WithResolver(proxyForInterface(
             InterfaceClass('*', tuple(providedBy(reactor)))
@@ -3785,12 +3797,15 @@ def controllableResolvingReactor(reactor):
     return WithResolver(reactor), controller
 
 
+
 class HostnameEndpointRuleMachine(RuleBasedStateMachine):
     def __init__(self, case):
         self.case = case
         super(HostnameEndpointRuleMachine, self).__init__()
         self.reactor = MemoryReactor()
-        resolvingReactor, self.resolverController = controllableResolvingReactor(self.reactor)
+        resolvingReactor, self.resolverController = (
+            controllableResolvingReactor(self.reactor)
+        )
 
         address = HostnameAddress(b"ipv6.example.com", 80)
         self.endpoint = endpoints.HostnameEndpoint(
@@ -3809,10 +3824,10 @@ class HostnameEndpointRuleMachine(RuleBasedStateMachine):
         nextCall = self.reactor.calls[0].getTime() - self.reactor.seconds()
         self.reactor.advance(nextCall)
 
-
     # From IResolutionReceiver
     # - triggered via deterministicResolvingReactor
     # resolutionBegan
+
 
     @precondition(lambda self: self.resolverController._receiver)
     @rule(address=st.sampled_from([
@@ -3822,10 +3837,12 @@ class HostnameEndpointRuleMachine(RuleBasedStateMachine):
     def endpointResolved(self, address):
         self.resolverController.resolveAddress(address)
 
+
     @precondition(lambda self: self.resolverController._receiver)
     @rule()
     def resolutionComplete(self):
         self.resolverController.finishResolving()
+
 
     @precondition(lambda self: self.reactor.tcpClients)
     @rule(choice=st.choices())
@@ -3858,6 +3875,7 @@ class HostnameEndpointRuleMachine(RuleBasedStateMachine):
         self.connectDeferred.cancel()
         self.cancelled = True
 
+
     def steps(self):
         from hypothesis.errors import InvalidDefinition
         try:
@@ -3865,10 +3883,12 @@ class HostnameEndpointRuleMachine(RuleBasedStateMachine):
         except InvalidDefinition:
             return st.just(None)
 
+
     def execute_step(self, step):
         if step is None:
             return
         return super(HostnameEndpointRuleMachine, self).execute_step(step)
+
 
     def print_step(self, step):
         if step is None:
