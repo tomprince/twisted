@@ -3801,9 +3801,10 @@ class HostnameEndpointRuleMachine(RuleBasedStateMachine):
         )
         self.connectDeferred.addErrback(lambda _: None)
 
+    @precondition(lambda self: self.reactor.calls)
     @rule()
     def timeout(self):
-        self.reactor.advance(endpoints.HostnameEndpoint._DEFAULT_ATTEMPT_DELAY / 2)
+        self.reactor.advance(endpoints.HostnameEndpoint._DEFAULT_ATTEMPT_DELAY * 2)
 
     # From IResolutionReceiver
     # - triggered via deterministicResolvingReactor
@@ -3843,13 +3844,32 @@ class HostnameEndpointRuleMachine(RuleBasedStateMachine):
         self.reactor.tcpClients.remove(tcpClient)
         failConnection(tcpClient)
 
+    cancelled = False
+    @precondition(lambda self: not self.cancelled)
     @rule()
     def userCancellation(self):
         """
         A user cancelled the outermost deferred.
         """
         self.connectDeferred.cancel()
+        self.cancelled = True
 
+    def steps(self):
+        from hypothesis.errors import InvalidDefinition
+        try:
+            return super(HostnameEndpointRuleMachine, self).steps()
+        except InvalidDefinition:
+            return st.just(None)
+
+    def execute_step(self, step):
+        if step is None:
+            return
+        return super(HostnameEndpointRuleMachine, self).execute_step(step)
+
+    def print_step(self, step):
+        if step is None:
+            return
+        return super(HostnameEndpointRuleMachine, self).print_step(step)
 
 
 
