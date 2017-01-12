@@ -3737,3 +3737,122 @@ class WrapClientTLSTests(unittest.TestCase):
         notImplemented = self.assertRaises(NotImplementedError, replaced,
                                            None, None)
         self.assertIn("OpenSSL not available", str(notImplemented))
+
+
+from hypothesis import strategies as st
+from hypothesis.stateful import RuleBasedStateMachine, rule, run_state_machine_as_test, precondition
+
+def makeConnection(tcpClient, transport=object()):
+    (host, port, factory, timeout, bindAddress) = tcpClient
+    clientProtocol = factory.buildProtocol(None)
+    clientProtocol.makeConnection(transport)
+
+def failConnection(tcpClient, exception=None):
+    if exception is None:
+        exception = error.ConnectError(string="Connection Failed")
+    (host, port, factory, timeout, bindAddress) = tcpClient
+    factory.clientConnectionFailed(None, exception)
+
+import attr
+@attr.s
+class ResolverController(object):
+    _receiver = attr.ib(default=None)
+
+    def resolveAddress(self, address):
+        self._receiver.addressResolved(address)
+
+    def finishResolving(self):
+        self._receiver.resolutionComplete()
+        self._receiver = None
+
+def controllableResolvingReactor(reactor):
+    controller = ResolverController()
+    @provider(IHostnameResolver)
+    class SimpleNameResolver(object):
+        @staticmethod
+        def resolveHostName(resolutionReceiver, hostName, portNumber=0,
+                            addressTypes=None, transportSemantics='TCP'):
+            from twisted.internet._resolver import HostResolution
+            resolutionReceiver.resolutionBegan(HostResolution(hostName))
+            assert controller._receiver is None
+            controller._receiver = resolutionReceiver
+
+    @provider(IReactorPluggableNameResolver)
+    class WithResolver(proxyForInterface(
+            InterfaceClass('*', tuple(providedBy(reactor)))
+    )):
+        nameResolver = SimpleNameResolver()
+    return WithResolver(reactor), controller
+
+
+class HostnameEndpointRuleMachine(RuleBasedStateMachine):
+    def __init__(self, case):
+        self.case = case
+        super(HostnameEndpointRuleMachine, self).__init__()
+        self.reactor = MemoryReactor()
+        resolvingReactor, self.resolverController = controllableResolvingReactor(self.reactor)
+
+        address = HostnameAddress(b"ipv6.example.com", 80)
+        self.endpoint = endpoints.HostnameEndpoint(
+            resolvingReactor, b"ipv6.example.com", address.port,
+        )
+        self.connectDeferred = self.endpoint.connect(
+            protocol.Factory.forProtocol(protocol.Protocol)
+        )
+        self.connectDeferred.addErrback(lambda _: None)
+
+    @rule()
+    def timeout(self):
+        self.reactor.advance(endpoints.HostnameEndpoint._DEFAULT_ATTEMPT_DELAY / 2)
+
+    # From IResolutionReceiver
+    # - triggered via deterministicResolvingReactor
+    # resolutionBegan
+
+    @precondition(lambda self: self.resolverController._receiver)
+    @rule(address=st.sampled_from([
+        IPv6Address("TCP", "::1", 80),
+        IPv4Address("TCP", "127.0.0.1", 0),
+    ]))
+    def endpointResolved(self, address):
+        self.resolverController.resolveAddress(address)
+
+    @precondition(lambda self: self.resolverController._receiver)
+    @rule()
+    def resolutionComplete(self):
+        self.resolverController.finishResolving()
+
+    @precondition(lambda self: self.reactor.tcpClients)
+    @rule(choice=st.choices())
+    def established(self, choice):
+        """
+        A connection has been established.
+        """
+        tcpClient = choice(self.reactor.tcpClients)
+        self.reactor.tcpClients.remove(tcpClient)
+        makeConnection(tcpClient)
+
+
+    @precondition(lambda self: self.reactor.tcpClients)
+    @rule(choice=st.choices())
+    def oneAttemptFailed(self, choice):
+        """
+        A connection cannot be established
+        """
+        tcpClient = choice(self.reactor.tcpClients)
+        self.reactor.tcpClients.remove(tcpClient)
+        failConnection(tcpClient)
+
+    @rule()
+    def userCancellation(self):
+        """
+        A user cancelled the outermost deferred.
+        """
+        self.connectDeferred.cancel()
+
+
+
+
+class HostnameEndpointMachineTests(unittest.SynchronousTestCase):
+    def test_stuff(self):
+        run_state_machine_as_test(lambda: HostnameEndpointRuleMachine(self))

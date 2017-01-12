@@ -354,12 +354,13 @@ class _FakeConnector(object):
     _disconnected = False
     stoppedConnecting = False
 
-    def __init__(self, address):
+    def __init__(self, address, stopConnecting):
         """
         @param address: An L{IAddress} provider that represents this
             connector's destination.
         """
         self._address = address
+        self.stopConnecting = stopConnecting
 
 
     def stopConnecting(self):
@@ -639,10 +640,11 @@ class MemoryReactor(object):
         returns an L{IConnector}.
         """
         self.tcpClients.append((host, port, factory, timeout, bindAddress))
+        stopConnecting = lambda tcpClient=self.tcpClients[-1]: self.tcpClients.remove(tcpClient)
         if isIPv6Address(host):
-            conn = _FakeConnector(IPv6Address('TCP', host, port))
+            conn = _FakeConnector(IPv6Address('TCP', host, port), stopConnecting)
         else:
-            conn = _FakeConnector(IPv4Address('TCP', host, port))
+            conn = _FakeConnector(IPv4Address('TCP', host, port), stopConnecting)
         factory.startedConnecting(conn)
         self.connectors.append(conn)
         return conn
